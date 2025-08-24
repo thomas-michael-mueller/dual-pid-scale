@@ -491,15 +491,23 @@ void goToSleep() {
     }
     scale.power_down();
     Serial.println("HX711 im Power-Down. ESP32 geht schlafen.");
-    pinMode(BUTTON_1_PIN_TOGGLE_MODE, INPUT_PULLUP);
-    pinMode(BUTTON_2_PIN_TARE, INPUT_PULLUP);
-    delay(1);
-    // RTC-Peripherie abschalten, damit der Akku im Tiefschlaf kaum entladen wird
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+
+    // Buttons für RTC-Domain konfigurieren, damit sie als Wakeup-Quelle dienen können
+    pinMode(BUTTON_1_PIN_TOGGLE_MODE, INPUT);
+    pinMode(BUTTON_2_PIN_TARE, INPUT);
+    rtc_gpio_pullup_en(BUTTON_1_PIN_TOGGLE_MODE);
+    rtc_gpio_pullup_en(BUTTON_2_PIN_TARE);
+    rtc_gpio_hold_en(BUTTON_1_PIN_TOGGLE_MODE);
+    rtc_gpio_hold_en(BUTTON_2_PIN_TARE);
+
+    // RTC-Peripherie eingeschaltet lassen, damit Button-Wakeup funktioniert
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+
     // Beide Tasten als Wakeup-Quelle konfigurieren (aktive Low-Pegel)
     gpio_wakeup_enable(BUTTON_1_PIN_TOGGLE_MODE, GPIO_INTR_LOW_LEVEL);
     gpio_wakeup_enable(BUTTON_2_PIN_TARE, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
+
     Serial.println("ESP32 geht jetzt schlafen in Deep Sleep.");
     delay(100);
     esp_deep_sleep_start();
