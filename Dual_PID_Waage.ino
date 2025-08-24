@@ -31,7 +31,7 @@ unsigned long inactivitySleepTimeout = 120 * 1000UL; // Standardwert 120s, in ms
 // --- Pin-Konfiguration (unverändert) ---
 const gpio_num_t HX711_DOUT_PIN           = GPIO_NUM_26;
 const gpio_num_t HX711_SCK_PIN            = GPIO_NUM_27;
-const gpio_num_t BUTTON_1_PIN_TOGGLE_MODE = GPIO_NUM_0;    // Langer Druck für Toggle, beim Booten für Config
+const gpio_num_t BUTTON_1_PIN_TOGGLE_MODE = GPIO_NUM_0;    // Kurzer Druck für Toggle, langer Druck für Tiefschlaf, beim Booten für Config
 const gpio_num_t BUTTON_2_PIN_TARE        = GPIO_NUM_35;   // Kurzer Druck für Tara
 
 // --- RTC-Daten (unverändert) ---
@@ -408,12 +408,14 @@ void processButton1_ToggleMode() {
                     Serial.print(F("[BUTTON 1] Losgelassen. Dauer: "));
                     Serial.println(pressDuration);
                     if (pressDuration >= longPressThreshold) {
-                        Serial.println(F(">> Langer Druck (Button 1): Toggle Mode Anfrage."));
-                        currentScaleData.status_flags |= ESPNOW_SCALE_FLAG_TOGGLE_MODE;
+                        Serial.println(F(">> Langer Druck (Button 1): Tiefschlaf-Anfrage."));
+                        forceFullDisplayRedraw = true;
+                        goToSleep();
                     } else {
-                        Serial.println(F(">> Kurzer Druck (Button 1): Keine dedizierte Aktion."));
+                        Serial.println(F(">> Kurzer Druck (Button 1): Toggle Mode Anfrage."));
+                        currentScaleData.status_flags |= ESPNOW_SCALE_FLAG_TOGGLE_MODE;
+                        forceFullDisplayRedraw = true;
                     }
-                    forceFullDisplayRedraw = true;
                 }
                 btn1IsCurrentlyPressed = false;
             }
