@@ -1,4 +1,4 @@
-// ##### WAAGEN-ESP (TTGO T-Display - SENDER V17 - Web-Konfiguration & USB-Neustart) #####
+// ##### WAAGEN-ESP (TTGO T-Display - Web-Konfiguration) #####
 
 // --- NEUE BIBLIOTHEKEN ---
 #include <WebServer.h>
@@ -67,7 +67,7 @@ HX711 scale;
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite weightSprite = TFT_eSprite(&tft);
 uint16_t ACCENT_COLOR;
-const char* FW_VERSION = "V17";
+const char* FW_VERSION = "V2.0";
 
 // --- ESP-NOW Datenstruktur (unverändert) ---
 typedef struct struct_espnow_scale_message {
@@ -628,7 +628,7 @@ void setup() {
 // ### ANGEPASSTE `setup_waage()` FUNKTION (Normaler Start)         ###
 // ####################################################################
 void setup_waage() {
-    Serial.println(F("\n\nTTGO T-Display Waagen-Sender V17"));
+    Serial.println(F("\n\nTTGO T-Display Waagen-Sender"));
     Serial.println(F("======================================================"));
     setCpuFrequencyMhz(80);
     esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
@@ -868,4 +868,5 @@ void loop_waage() {
         goToSleep();
     }
     delay(50);
+
 }
