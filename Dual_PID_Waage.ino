@@ -67,6 +67,7 @@ HX711 scale;
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite weightSprite = TFT_eSprite(&tft);
 uint16_t ACCENT_COLOR;
+const char* FW_VERSION = "V17";
 
 // --- ESP-NOW Datenstruktur (unverändert) ---
 typedef struct struct_espnow_scale_message {
@@ -568,12 +569,25 @@ void setup() {
     #endif
 
     bool enterConfigMode = false;
-    
+
+    float bootVoltage = 0.0f;
+    if (BATTERY_ADC_PIN >= 0) {
+        analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
+        bootVoltage = getBatteryVoltage();
+    }
+
     // --- NEUE LOGIK: Abfragefenster für Config-Modus ---
     tft.fillScreen(TFT_BLACK);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.drawString("Untere Taste: Konfig.-Modus.", tft.width() / 2, tft.height() / 2, 2);
+
+    char infoBuf[32];
+    snprintf(infoBuf, sizeof(infoBuf), "Version: %s", FW_VERSION);
+    tft.drawString(infoBuf, tft.width() / 2, tft.height() / 2 + 20, 2);
+    snprintf(infoBuf, sizeof(infoBuf), "Akku: %.2fV", bootVoltage);
+    tft.drawString(infoBuf, tft.width() / 2, tft.height() / 2 + 40, 2);
+
     Serial.println("Pruefe auf manuellen Start des Konfigurationsmodus (3s Zeitfenster)...");
 
     unsigned long startTime = millis();
