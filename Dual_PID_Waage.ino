@@ -42,7 +42,7 @@ RTC_DATA_ATTR bool rtcFirstBootAfterWake = true;
 const int BATTERY_ADC_PIN              = 34;
 const float VOLTAGE_DIVIDER_RATIO      = 2.27;
 const float ESP32_ADC_VREF             = 3.3;
-const float CHARGING_VOLTAGE_THRESHOLD = 4.22;
+const float CHARGING_VOLTAGE_THRESHOLD = 4.7;
 
 // --- Button-Handling (unverändert) ---
 uint8_t  lastBtn1RawState = 1;
@@ -236,11 +236,25 @@ void runConfigPortal() {
     server.on("/save", HTTP_POST, handleSave);
     server.begin();
 
-    // Endlosschleife, um Web-Anfragen zu bearbeiten
+    // Pins als Eingänge konfigurieren, damit ein Tastendruck erkannt werden kann
+    pinMode(BUTTON_1_PIN_TOGGLE_MODE, INPUT_PULLUP);
+    pinMode(BUTTON_2_PIN_TARE, INPUT_PULLUP);
+
+    // Endlosschleife, um Web-Anfragen zu bearbeiten und auf Tasten zu reagieren
     while (true) {
         server.handleClient();
+        // Verlasse den Konfigurationsmodus bei Druck auf eine der beiden Tasten
+        if (digitalRead(BUTTON_1_PIN_TOGGLE_MODE) == LOW ||
+            digitalRead(BUTTON_2_PIN_TARE) == LOW) {
+            Serial.println("Button erkannt - Konfigurationsmodus wird beendet.");
+            break;
+        }
         delay(1);
     }
+
+    server.stop();
+    WiFi.softAPdisconnect(true);
+    Serial.println("Konfigurationsmodus verlassen.");
 }
 
 
@@ -535,17 +549,20 @@ void setup() {
         if (!loadConfiguration()) {
             Serial.println("Keine gueltige Konfiguration gefunden. Starte Konfigurationsmodus automatisch.");
             enterConfigMode = true;
+        } else {
+            Serial.println("Gültige Konfiguration vorhanden. Starte normalen Waagenbetrieb.");
         }
     }
 
-    // Entscheide basierend auf dem Flag, welcher Modus gestartet wird
+    // Konfigurationsmodus ausführen, wenn erforderlich
     if (enterConfigMode) {
-        runConfigPortal(); // Diese Funktion blockiert den Code und startet nach dem Speichern neu.
-    } else {
-        // Konfiguration ist geladen, starte den normalen Waagenbetrieb.
-        Serial.println("Gültige Konfiguration vorhanden. Starte normalen Waagenbetrieb.");
-        setup_waage();
+        runConfigPortal(); // Funktion blockiert und kehrt erst nach Button-Druck oder Speichern zurück
+        // Nach dem Verlassen erneut versuchen, eine gespeicherte Konfiguration zu laden
+        loadConfiguration();
     }
+
+    // Starte den normalen Waagenbetrieb
+    setup_waage();
 }
 
 // ####################################################################
