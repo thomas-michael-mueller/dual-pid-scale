@@ -103,12 +103,14 @@ bool          wasPreviouslyCharging = false; // NEU: Für die Erkennung der USB-
  * @param mac Die MAC-Adresse als String (Format: "XX:XX:XX:XX:XX:XX").
  * @param kanal Der WLAN-Kanal.
  * @param sleep Die Zeit bis zum Deep Sleep in Sekunden.
+ * @param calib Kalibrierungsfaktor für den HX711.
  */
-void saveConfiguration(String mac, int kanal, int sleep) {
+void saveConfiguration(String mac, int kanal, int sleep, float calib) {
     preferences.begin("waage-cfg", false); // "waage-cfg" ist der Namespace, false = read/write
     preferences.putString("mac_addr", mac);
     preferences.putUInt("wifi_kanal", kanal);
     preferences.putUInt("sleep_time", sleep);
+    preferences.putFloat("calib_factor", calib);
     preferences.end();
 }
 
@@ -136,12 +138,14 @@ bool loadConfiguration() {
 
     wifi_kanal = preferences.getUInt("wifi_kanal", 1);
     inactivitySleepTimeout = preferences.getUInt("sleep_time", 120) * 1000UL; // In s speichern, in ms umrechnen
+    calibration_factor = preferences.getFloat("calib_factor", calibration_factor);
 
     preferences.end();
     Serial.println("Konfiguration erfolgreich geladen.");
     Serial.print("  > Ziel-MAC: "); Serial.println(macStr);
     Serial.print("  > WLAN-Kanal: "); Serial.println(wifi_kanal);
     Serial.print("  > Sleep nach (s): "); Serial.println(inactivitySleepTimeout / 1000);
+    Serial.print("  > Kalibrierfaktor: "); Serial.println(calibration_factor, 2);
     return true;
 }
 
@@ -158,6 +162,7 @@ void handleRoot() {
 
     // Umwandlung der Sleep-Zeit von Millisekunden in Sekunden für die Anzeige
     String sleep_sec = String(inactivitySleepTimeout / 1000);
+    String calib_str = String(calibration_factor, 2);
 
     // HTML-Vorlage mit Platzhaltern
     String html = R"rawliteral(
@@ -170,19 +175,42 @@ void handleRoot() {
   input{width:100%;padding:10px;margin-top:5px;box-sizing:border-box;border:1px solid #ccc;border-radius:4px}
   button{background-color:#d89904;color:white;padding:12px 20px;border:none;border-radius:4px;cursor:pointer;margin-top:20px;font-size:16px;width:100%}
   button:hover{background-color:#b57e03}
-</style></head><body>
+</style>
+<script>
+function calcCalib(){
+  var gemessen=parseFloat(document.getElementById('measured').value);
+  var tatsaechlich=parseFloat(document.getElementById('actual').value);
+  var aktuell=parseFloat(document.getElementById('calib').value);
+  if(gemessen>0 && tatsaechlich>0){
+    var neu=aktuell*(gemessen/tatsaechlich);
+    document.getElementById('calib').value=neu.toFixed(2);
+  }else{
+    alert('Bitte gemessenes und tats&auml;chliches Gewicht eingeben.');
+  }
+}
+</script></head><body>
 <div class="container">
   <h2>Waagen-Konfiguration</h2>
   <form action="/save" method="POST">
     <label for="mac">MAC-Adresse des Haupt-Controllers:</label>
     <input type="text" id="mac" name="mac" placeholder="z.B. E4:65:B8:71:B1:60" pattern="^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$" value="_MAC_" required>
-    
+
     <label for="kanal">WLAN-Kanal (1-13):</label>
     <input type="number" id="kanal" name="kanal" min="1" max="13" value="_KANAL_" required>
-    
+
     <label for="sleep">Zeit bis Deep Sleep (in Sekunden):</label>
     <input type="number" id="sleep" name="sleep" min="30" value="_SLEEP_" required>
-    
+
+    <label for="calib">Kalibrierungsfaktor:</label>
+    <input type="number" step="any" id="calib" name="calib" value="_CALIB_" required>
+
+    <label for="measured">Gemessenes Referenzgewicht (g):</label>
+    <input type="number" step="any" id="measured" name="measured">
+
+    <label for="actual">Tats&auml;chliches Referenzgewicht (g):</label>
+    <input type="number" step="any" id="actual" name="actual">
+
+    <button type="button" onclick="calcCalib()">Kalibrierfaktor berechnen</button>
     <button type="submit">Speichern & Neustarten</button>
   </form>
 </div></body></html>)rawliteral";
@@ -191,6 +219,7 @@ void handleRoot() {
     html.replace("_MAC_", mac_str);
     html.replace("_KANAL_", String(wifi_kanal));
     html.replace("_SLEEP_", sleep_sec);
+    html.replace("_CALIB_", calib_str);
 
     server.send(200, "text/html", html);
 }
@@ -202,8 +231,16 @@ void handleSave() {
     String mac = server.arg("mac");
     int kanal = server.arg("kanal").toInt();
     int sleep = server.arg("sleep").toInt();
+    float calib = server.arg("calib").toFloat();
 
-    saveConfiguration(mac, kanal, sleep);
+    float gemessen = server.arg("measured").toFloat();
+    float tatsaechlich = server.arg("actual").toFloat();
+    if (gemessen > 0 && tatsaechlich > 0) {
+        calib = calib * (gemessen / tatsaechlich);
+    }
+
+    saveConfiguration(mac, kanal, sleep, calib);
+    calibration_factor = calib;
 
     String response = "<h1>Speichern erfolgreich!</h1><p>Ger&auml;t wird neu gestartet...</p><script>setTimeout(function(){window.location.href='/';}, 3000);</script>";
     server.send(200, "text/html", response);
