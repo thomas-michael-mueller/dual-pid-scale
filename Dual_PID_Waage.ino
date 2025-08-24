@@ -31,7 +31,7 @@ unsigned long inactivitySleepTimeout = 120 * 1000UL; // Standardwert 120s, in ms
 // --- Pin-Konfiguration (unverändert) ---
 const gpio_num_t HX711_DOUT_PIN           = GPIO_NUM_26;
 const gpio_num_t HX711_SCK_PIN            = GPIO_NUM_27;
-const gpio_num_t BUTTON_1_PIN_TOGGLE_MODE = GPIO_NUM_0;    // Langer Druck für Toggle, beim Booten für Config
+const gpio_num_t BUTTON_1_PIN_TOGGLE_MODE = GPIO_NUM_0;    // Kurzer Druck für Toggle, langer Druck für Tiefschlaf, beim Booten für Config
 const gpio_num_t BUTTON_2_PIN_TARE        = GPIO_NUM_35;   // Kurzer Druck für Tara
 
 // --- RTC-Daten (unverändert) ---
@@ -42,7 +42,7 @@ RTC_DATA_ATTR bool rtcFirstBootAfterWake = true;
 const int BATTERY_ADC_PIN              = 34;
 const float VOLTAGE_DIVIDER_RATIO      = 2.27;
 const float ESP32_ADC_VREF             = 3.3;
-const float CHARGING_VOLTAGE_THRESHOLD = 4.22;
+const float CHARGING_VOLTAGE_THRESHOLD = 4.7;
 
 // --- Button-Handling (unverändert) ---
 uint8_t  lastBtn1RawState = 1;
@@ -236,11 +236,25 @@ void runConfigPortal() {
     server.on("/save", HTTP_POST, handleSave);
     server.begin();
 
-    // Endlosschleife, um Web-Anfragen zu bearbeiten
+    // Pins als Eingänge konfigurieren, damit ein Tastendruck erkannt werden kann
+    pinMode(BUTTON_1_PIN_TOGGLE_MODE, INPUT_PULLUP);
+    pinMode(BUTTON_2_PIN_TARE, INPUT_PULLUP);
+
+    // Endlosschleife, um Web-Anfragen zu bearbeiten und auf Tasten zu reagieren
     while (true) {
         server.handleClient();
+        // Verlasse den Konfigurationsmodus bei Druck auf eine der beiden Tasten
+        if (digitalRead(BUTTON_1_PIN_TOGGLE_MODE) == LOW ||
+            digitalRead(BUTTON_2_PIN_TARE) == LOW) {
+            Serial.println("Button erkannt - Konfigurationsmodus wird beendet.");
+            break;
+        }
         delay(1);
     }
+
+    server.stop();
+    WiFi.softAPdisconnect(true);
+    Serial.println("Konfigurationsmodus verlassen.");
 }
 
 
@@ -250,21 +264,38 @@ void runConfigPortal() {
 
 float getBatteryVoltage() {
     if (BATTERY_ADC_PIN < 0) return 0.0;
-    uint32_t adc_raw_sum = 0;
+    uint32_t millivolt_sum = 0;
     for (int i = 0; i < ADC_SAMPLES; i++) {
-        adc_raw_sum += analogRead(BATTERY_ADC_PIN);
+        millivolt_sum += analogReadMilliVolts(BATTERY_ADC_PIN);
         delayMicroseconds(50);
     }
-    float adc_raw_avg = (float)adc_raw_sum / ADC_SAMPLES;
-    float voltage_at_pin = (adc_raw_avg / 4095.0) * ESP32_ADC_VREF;
-    float actual_battery_voltage = voltage_at_pin * VOLTAGE_DIVIDER_RATIO;
+    float mv_avg = (float)millivolt_sum / ADC_SAMPLES;
+    float actual_battery_voltage = (mv_avg / 1000.0) * VOLTAGE_DIVIDER_RATIO;
     return actual_battery_voltage;
+}
+
+int voltageToPercent(float voltage) {
+    const float voltages[] = {4.20, 4.15, 4.11, 4.08, 4.02, 3.98, 3.92, 3.87, 3.82, 3.78,
+                              3.74, 3.70, 3.65, 3.61, 3.58, 3.55, 3.51, 3.48, 3.44, 3.41, 3.30};
+    const int percents[]    = {100, 95, 90, 85, 80, 75, 70, 65, 60, 55,
+                               50, 45, 40, 35, 30, 25, 20, 15, 10, 5, 0};
+    if (voltage >= voltages[0]) return 100;
+    for (size_t i = 0; i < (sizeof(voltages) / sizeof(voltages[0])) - 1; i++) {
+        if (voltage >= voltages[i + 1]) {
+            float vHigh = voltages[i];
+            float vLow  = voltages[i + 1];
+            int pHigh   = percents[i];
+            int pLow    = percents[i + 1];
+            return pLow + (int)((voltage - vLow) * (pHigh - pLow) / (vHigh - vLow));
+        }
+    }
+    return 0;
 }
 
 void updateBatteryStatus() {
     float voltage = getBatteryVoltage();
     cachedIsCharging = (voltage > CHARGING_VOLTAGE_THRESHOLD);
-    cachedBatteryPercentage = map(constrain((long)(voltage * 1000), 3200L, 4200L), 3200L, 4200L, 0, 100);
+    cachedBatteryPercentage = voltageToPercent(voltage);
 }
 
 void drawBatteryIcon(int x, int y, int percentage, bool isChargingFlag = false) {
@@ -353,9 +384,7 @@ void sendDataViaEspNow(bool forceSend = false) {
         currentScaleData.status_flags &= ~ESPNOW_SCALE_FLAG_AWOKE;
         shouldSend = true;
     }
-    currentScaleData.battery_percentage = getBatteryVoltage() >= 0
-        ? map(constrain((long)(getBatteryVoltage() * 1000), 3200L, 4200L), 3200L, 4200L, 0, 100)
-        : 0;
+    currentScaleData.battery_percentage = cachedBatteryPercentage;
     msgToSend.battery_percentage = currentScaleData.battery_percentage;
     if (abs(msgToSend.weight_g - lastActuallySentWeightForComparison) > 0.05 || forceSend || msgToSend.status_flags != 0) {
         shouldSend = true;
@@ -393,12 +422,14 @@ void processButton1_ToggleMode() {
                     Serial.print(F("[BUTTON 1] Losgelassen. Dauer: "));
                     Serial.println(pressDuration);
                     if (pressDuration >= longPressThreshold) {
-                        Serial.println(F(">> Langer Druck (Button 1): Toggle Mode Anfrage."));
-                        currentScaleData.status_flags |= ESPNOW_SCALE_FLAG_TOGGLE_MODE;
+                        Serial.println(F(">> Langer Druck (Button 1): Tiefschlaf-Anfrage."));
+                        forceFullDisplayRedraw = true;
+                        goToSleep();
                     } else {
-                        Serial.println(F(">> Kurzer Druck (Button 1): Keine dedizierte Aktion."));
+                        Serial.println(F(">> Kurzer Druck (Button 1): Toggle Mode Anfrage."));
+                        currentScaleData.status_flags |= ESPNOW_SCALE_FLAG_TOGGLE_MODE;
+                        forceFullDisplayRedraw = true;
                     }
-                    forceFullDisplayRedraw = true;
                 }
                 btn1IsCurrentlyPressed = false;
             }
@@ -460,15 +491,23 @@ void goToSleep() {
     }
     scale.power_down();
     Serial.println("HX711 im Power-Down. ESP32 geht schlafen.");
-    pinMode(BUTTON_1_PIN_TOGGLE_MODE, INPUT_PULLUP);
-    pinMode(BUTTON_2_PIN_TARE, INPUT_PULLUP);
-    delay(1);
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+
+    // Buttons für RTC-Domain konfigurieren, damit sie als Wakeup-Quelle dienen können
+    pinMode(BUTTON_1_PIN_TOGGLE_MODE, INPUT);
+    pinMode(BUTTON_2_PIN_TARE, INPUT);
+    rtc_gpio_pullup_en(BUTTON_1_PIN_TOGGLE_MODE);
+    rtc_gpio_pullup_en(BUTTON_2_PIN_TARE);
     rtc_gpio_hold_en(BUTTON_1_PIN_TOGGLE_MODE);
     rtc_gpio_hold_en(BUTTON_2_PIN_TARE);
+
+    // RTC-Peripherie eingeschaltet lassen, damit Button-Wakeup funktioniert
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+
+    // Beide Tasten als Wakeup-Quelle konfigurieren (aktive Low-Pegel)
     gpio_wakeup_enable(BUTTON_1_PIN_TOGGLE_MODE, GPIO_INTR_LOW_LEVEL);
     gpio_wakeup_enable(BUTTON_2_PIN_TARE, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
+
     Serial.println("ESP32 geht jetzt schlafen in Deep Sleep.");
     delay(100);
     esp_deep_sleep_start();
@@ -518,17 +557,20 @@ void setup() {
         if (!loadConfiguration()) {
             Serial.println("Keine gueltige Konfiguration gefunden. Starte Konfigurationsmodus automatisch.");
             enterConfigMode = true;
+        } else {
+            Serial.println("Gültige Konfiguration vorhanden. Starte normalen Waagenbetrieb.");
         }
     }
 
-    // Entscheide basierend auf dem Flag, welcher Modus gestartet wird
+    // Konfigurationsmodus ausführen, wenn erforderlich
     if (enterConfigMode) {
-        runConfigPortal(); // Diese Funktion blockiert den Code und startet nach dem Speichern neu.
-    } else {
-        // Konfiguration ist geladen, starte den normalen Waagenbetrieb.
-        Serial.println("Gültige Konfiguration vorhanden. Starte normalen Waagenbetrieb.");
-        setup_waage();
+        runConfigPortal(); // Funktion blockiert und kehrt erst nach Button-Druck oder Speichern zurück
+        // Nach dem Verlassen erneut versuchen, eine gespeicherte Konfiguration zu laden
+        loadConfiguration();
     }
+
+    // Starte den normalen Waagenbetrieb
+    setup_waage();
 }
 
 // ####################################################################
@@ -537,6 +579,8 @@ void setup() {
 void setup_waage() {
     Serial.println(F("\n\nTTGO T-Display Waagen-Sender V17"));
     Serial.println(F("======================================================"));
+    setCpuFrequencyMhz(80);
+    esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
 
     ACCENT_COLOR = tft.color565(216, 153, 4);
     lastButtonActivityTime = millis();
@@ -598,6 +642,7 @@ void setup_waage() {
     
     // ESP-NOW mit den geladenen Werten initialisieren
     WiFi.mode(WIFI_STA);
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     esp_wifi_set_channel(wifi_kanal, WIFI_SECOND_CHAN_NONE); // Verwendet geladene Variable
     if (esp_now_init() != ESP_OK) {
         Serial.println("ESP-NOW Init Error"); return;
